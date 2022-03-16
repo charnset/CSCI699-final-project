@@ -1,23 +1,21 @@
+import os
 import argparse
 import json
 import gzip
-from utils import compute_mmd
+from utils import random_sampling, MMD
 import numpy as np
 from allennlp.common.file_utils import cached_path
 from sentence_transformers import SentenceTransformer
 
 model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-x', type=str, help="path to first dataset (x)")
-parser.add_argument('-y', type=str, help="path to second dataset (y)")
-args = parser.parse_args()
+memo = {}
 
 def read_data(path):
 	with gzip.open(cached_path(path), 'rb') as f:
 		query_data = []
 		for i, line in enumerate(f):
-			# if i == 101:
+			# if i == 201:
 			# 	break
 			obj = json.loads(line)
 
@@ -54,14 +52,41 @@ def create_dataset(query_data):
 
 	return np.array(dataset)
 
-query_data_x = read_data(args.x)
-dataset_x = create_dataset(query_data_x)
-query_data_y = read_data(args.y)
-dataset_y = create_dataset(query_data_y)
-# print(query_data_x)
-print(dataset_x.shape)
-# print(query_data_x)
-print(dataset_y.shape)
+def cached_dataset(path):
+	if path in memo:
+		print("Cached: {}".format(path))
+		return memo[path]
+	else:
+		print("Loading: {} ...".format(path))
+		query_data = read_data(path)
+		dataset = create_dataset(query_data)
+		# print(dataset.shape)
+		dataset = random_sampling(dataset, 500)
+		# print(dataset_x.shape)
+		memo[path] = dataset
+		return dataset
+
+def extract_dir(dataset_x, directory):
+	filenames = [os.path.join(directory, f) for f in os.listdir(directory) if ".gz" in f]
+	for fn in filenames:
+		dataset_y = cached_dataset(fn)
+		# Compute MMD of dataset_x and dataset_y
+		print("MMD: {:.3f}".format(MMD(dataset_x, dataset_y, "rbf")))
+
+if __name__ == "__main__":
+	parser = argparse.ArgumentParser()
+	parser.add_argument('-b', type=str, help="path to training dataset")
+	parser.add_argument('-i', type=str, help="path to directory of in-domain datasets")
+	parser.add_argument('-o', type=str, help="path to directory of out-domain datasets")
+	args = parser.parse_args()
+
+	print("TRAINING DATASET (x): {}".format(args.b))
+	dataset_x = cached_dataset(args.b)
+	print("IN-DOMAIN DATASET (y)")
+	extract_dir(dataset_x, args.i) #in-domain
+	print("OUT-DOMAIN DATASET (y)")
+	extract_dir(dataset_x, args.o) #out-domain
+
 
 # Compute MMD of dataset_x and dataset_y
-print("x: {}, y: {}, MMD: {:.3f}".format(args.x, args.y, compute_mmd(dataset_x, dataset_y)))
+# print("x: {}, y: {}, MMD: {:.3f}".format(args.x, args.y, MMD(dataset_x, dataset_y, "rbf")))

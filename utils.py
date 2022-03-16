@@ -1,36 +1,52 @@
 import numpy as np
 import torch
+
+rng = np.random.default_rng() #random generator
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def base_kernel(x, y, sigma):
-    norm_square = np.linalg.norm(x-y) ** 2
-    sigma_square = sigma ** 2
-    
-    return np.exp(- norm_square /(2* sigma_square))
+print("device: {}".format(device))
 
-def composite_kernel(x, y, sigmas):
-    result = 0
-    
-    for sigma in sigmas:
-        result += base_kernel(x, y, sigma)
-        
-    return result
+def random_sampling(dataset, sampling_size=500):
+    return rng.choice(dataset, sampling_size, replace=False, axis=0)
 
-def compute_mmd(dataset_x, dataset_y, sigmas=[1, 5, 10, 15, 20]):
-    result = 0
-    n = len(dataset_x)
-    m = len(dataset_y)
-    
-    for i in range(n):
-        for j in range(n):
-            result += 1./(n**2) * composite_kernel(dataset_x[i], dataset_x[j], sigmas)
-    
-    for i in range(n):
-        for j in range(m):
-            result -= 2./(n*m) * composite_kernel(dataset_x[i], dataset_y[j], sigmas)
-    
-    for i in range(m):
-        for j in range(m):
-            result += 1./(m**2) * composite_kernel(dataset_y[i], dataset_y[j], sigmas)
-            
-    return np.sqrt(result)
+def MMD(x, y, kernel):
+    """Emprical maximum mean discrepancy. The lower the result
+       the more evidence that distributions are the same.
+
+    Args:
+        x: first sample, distribution P
+        y: second sample, distribution Q
+        kernel: kernel type such as "multiscale" or "rbf"
+    """
+    x = torch.from_numpy(x)
+    y = torch.from_numpy(y)
+
+    xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+    rx = (xx.diag().unsqueeze(0).expand_as(xx))
+    ry = (yy.diag().unsqueeze(0).expand_as(yy))
+
+    dxx = rx.t() + rx - 2. * xx # Used for A in (1)
+    dyy = ry.t() + ry - 2. * yy # Used for B in (1)
+    dxy = rx.t() + ry - 2. * zz # Used for C in (1)
+
+    XX, YY, XY = (torch.zeros(xx.shape).to(device),
+                  torch.zeros(xx.shape).to(device),
+                  torch.zeros(xx.shape).to(device))
+
+    if kernel == "multiscale":
+
+        bandwidth_range = [0.2, 0.5, 0.9, 1.3]
+        for a in bandwidth_range:
+            XX += a**2 * (a**2 + dxx)**-1
+            YY += a**2 * (a**2 + dyy)**-1
+            XY += a**2 * (a**2 + dxy)**-1
+
+    if kernel == "rbf":
+
+        bandwidth_range = [10, 15, 20, 50]
+        for a in bandwidth_range:
+            XX += torch.exp(-0.5*dxx/a)
+            YY += torch.exp(-0.5*dyy/a)
+            XY += torch.exp(-0.5*dxy/a)
+
+    return torch.mean(XX + YY - 2. * XY)
